@@ -1,0 +1,42 @@
+# trybox sandbox guest image: debian-slim userspace + OpenShell supervisor/sandbox binaries.
+#
+# Build context: this repository root (parent of trybox/). Pre-built Linux aarch64 musl
+# binaries come from openshell-driver-apple-container/guest-bin/ (which the driver
+# produces on install). Mounts the supervisor_bin_dir as /opt/openshell/bin at runtime
+# per the driver's launch model, so the binaries LIVE-mapped per sandbox.
+#
+# Note on UID: the image creates a non-root `sandbox` user (uid 1000). The entrypoint
+# (`/opt/openshell/bin/trybox-entrypoint`) starts as root to set up namespaces and
+# mounts, then drops privileges for the workload.
+
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      curl \
+      git \
+      bash \
+      iproute2 \
+      iptables \
+      iputils-ping \
+      socat \
+      tini \
+ && rm -rf /var/lib/apt/lists/*
+
+# Non-root workload user (matches the driver's launch model)
+RUN useradd --create-home --uid 1000 --shell /bin/bash sandbox
+
+# Per-image scaffolding: the runtime mounts supervisor binaries from the host
+# at /opt/openshell/bin. Here we just make sure the directory exists.
+RUN mkdir -p /opt/openshell/bin /sandbox /.openshell/supervisor /.openshell/channel/sandbox \
+ && chown -R sandbox:sandbox /sandbox \
+ && chmod 0755 /opt/openshell /opt/openshell/bin
+
+# Run as root at entrypoint; trybox-entrypoint drops privileges for the workload.
+USER root
+WORKDIR /sandbox
+
+# Entry point is replaced by the driver's `--entrypoint` flag at runtime:
+#   /opt/openshell/bin/trybox-entrypoint
+CMD ["/bin/bash"]
