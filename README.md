@@ -2,6 +2,8 @@
 
 `trybox "my idea"` — instant, sandboxed AI coding experiments on a Mac.
 
+## Install
+
 ```sh
 bash <(curl -fsSL https://raw.githubusercontent.com/potable-anarchy/trybox/main/install.sh)
 ```
