@@ -19,9 +19,6 @@ trybox builds on three projects it couldn't exist without:
 ## Quick start
 
 ```sh
-trybox init          # generate PKI + gateway config
-trybox driver start  # start the Apple Container compute driver
-trybox gateway start # start the OpenShell gateway
 trybox my big idea   # create try dir + sandbox + connect
 ```
 
