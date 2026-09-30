@@ -11,9 +11,7 @@ pub const DB_URL: &str = "sqlite:////tmp/trybox-test.db";
 pub const GATEWAY_BIND: &str = "127.0.0.1:17671";
 pub const GATEWAY_PORT: u16 = 17671;
 pub const GATEWAY_NAME: &str = "trybox-test";
-pub const GATEWAY_ENDPOINT: &str = "https://127.0.1:17671";
 pub const SANDBOX_IMAGE: &str = "local/trybox-sandbox:latest";
-pub const DEFAULT_POLICY_NAME: &str = "trybox-default-ro-github";
 
 /// The hardcoded dev release fallback path for _which():
 /// ~/code/tries/2026-09-29-trybox/OpenShell-upstream/target/release/
@@ -121,21 +119,6 @@ pub fn default_try_path() -> PathBuf {
         Ok(v) => PathBuf::from(v),
         Err(_) => home().join("code").join("tries"),
     }
-}
-
-/// Default agent: env TRYBOX_AGENT or "opencode"
-pub fn default_agent() -> String {
-    std::env::var("TRYBOX_AGENT").unwrap_or_else(|_| "opencode".to_string())
-}
-
-/// Default image: env TRYBOX_IMAGE or SANDBOX_IMAGE
-pub fn default_image() -> String {
-    std::env::var("TRYBOX_IMAGE").unwrap_or_else(|_| SANDBOX_IMAGE.to_string())
-}
-
-/// Default policy: env TRYBOX_POLICY or DEFAULT_POLICY_NAME
-pub fn default_policy() -> String {
-    std::env::var("TRYBOX_POLICY").unwrap_or_else(|_| DEFAULT_POLICY_NAME.to_string())
 }
 
 /// GATEWAY_ENDPOINT constant (corrected)

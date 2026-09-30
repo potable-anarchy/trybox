@@ -3,8 +3,8 @@
 // Depends on: config.rs, process.rs, trydir.rs
 
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::path::Path;
+use std::process::Command;
 
 use crate::trydir::Trybox;
 

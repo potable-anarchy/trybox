@@ -5,10 +5,10 @@
 // Each function returns an exit code (i32), matching the Python cmd_* functions.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
-use crate::trydir::{self, Trybox};
+use crate::trydir;
 
 // --------------------------------------------------------------------------- //
 // init

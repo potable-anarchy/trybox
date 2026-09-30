@@ -10,12 +10,14 @@ use regex::Regex;
 /// One trybox instance.
 pub struct Trybox {
     /// slug, e.g. "my-big-new-project"
+    #[allow(dead_code)]
     pub name: String,
     /// ~/code/tries/2026-09-29-my-big-new-project
     pub dir: PathBuf,
     /// trybox-my-big-new-project
     pub sandbox_name: String,
     /// YYYY-MM-DD
+    #[allow(dead_code)]
     pub date_prefix: String,
 }
 

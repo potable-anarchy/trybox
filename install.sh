@@ -9,10 +9,6 @@ have() { command -v "$1" >/dev/null 2>&1; }
 preflight() {
     local failures=0 version major available ancestor tool repo
     say 'Checking this Mac before installing anything…'
-    if [[ -d "$INSTALL_ROOT" && -n "$(ls -A "$INSTALL_ROOT")" && ! -f "$INSTALL_ROOT/.trybox-install" ]]; then
-        say "[FAIL] Refusing to use a nonempty directory not owned by this installer: $INSTALL_ROOT"
-        failures=$((failures + 1))
-    fi
     if [[ "$(uname -s)" != Darwin ]]; then
         fail 'trybox requires macOS 26 or later.' || return 1
     fi
@@ -44,19 +40,11 @@ preflight() {
         say '[FAIL] Install Homebrew first: https://brew.sh'
         failures=$((failures + 1))
     fi
-    ancestor=$INSTALL_ROOT
-    while [[ ! -e "$ancestor" ]]; do ancestor=$(dirname "$ancestor"); done
-    if [[ -d "$ancestor" && -w "$ancestor" ]]; then
-        say "[OK] Install location: $INSTALL_ROOT"
-    else
-        say "[FAIL] Install location is not writable: $INSTALL_ROOT"
-        failures=$((failures + 1))
+    if have container; then say '[OK] container CLI'; else
+        say '[INSTALL] container CLI (brew install container)'
     fi
-    available=$(df -Pk "$ancestor" | awk 'NR==2 {print $4}')
-    if [[ "$available" =~ ^[0-9]+$ ]] && (( available >= 12582912 )); then
-        say '[OK] At least 12 GiB free for source builds and the guest image'
-    else
-        say '[FAIL] Free at least 12 GiB on the install volume for this source installer.'
+    if have rustup; then say '[OK] rustup'; else
+        say '[FAIL] Install Rust: curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs | sh'
         failures=$((failures + 1))
     fi
     if have gh && gh auth status >/dev/null 2>&1; then
@@ -72,9 +60,6 @@ preflight() {
         say '[FAIL] These repos are private. Install gh and sign in: brew install gh && gh auth login'
         failures=$((failures + 1))
     fi
-    for tool in uv container cargo rustup aarch64-linux-musl-gcc; do
-        if have "$tool"; then say "[OK] $tool"; else say "[INSTALL] $tool"; fi
-    done
     if (( failures )); then
         fail "$failures prerequisite check(s) failed. No installation changes made."
         return 1
@@ -86,7 +71,7 @@ main() {
     local check_only=0 source_dir=''
     INSTALL_ROOT=${TRYBOX_INSTALL_ROOT:-"$HOME/.local/share/trybox"}
     export INSTALL_ROOT
-    export PATH="$PATH:$HOME/.local/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin"
+    export PATH="$PATH:$HOME/.local/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/opt/homebrew/opt/rustup/bin"
     while (( $# )); do
         case "$1" in
             --check) check_only=1; shift ;;
@@ -103,15 +88,14 @@ main() {
     done
     [[ "$INSTALL_ROOT" == /* ]] || { fail 'TRYBOX_INSTALL_ROOT must be absolute'; return 1; }
     [[ "$(id -u)" != 0 ]] || { fail 'Run as your normal user, without sudo.'; return 1; }
-    if [[ -n "$source_dir" && ! -f "$source_dir/pyproject.toml" ]]; then
-        fail "Not a trybox source directory: $source_dir"; return 1
+    if [[ -n "$source_dir" && ! -f "$source_dir/Cargo.toml" ]]; then
+        fail "Not a trybox source directory: $source_dir"
+        return 1
     fi
     preflight
     (( check_only )) && return 0
-    mkdir -p "$INSTALL_ROOT"
-    printf 'trybox installer v1\n' > "$INSTALL_ROOT/.trybox-install"
+    mkdir -p "$INSTALL_ROOT" "$HOME/.local/bin"
     if [[ -z "$source_dir" ]]; then
-        mkdir -p "$INSTALL_ROOT/src"
         source_dir="$INSTALL_ROOT/src/trybox"
         if [[ ! -e "$source_dir" ]]; then
             gh repo clone potable-anarchy/trybox "$source_dir"
@@ -122,7 +106,22 @@ main() {
             git -C "$source_dir" pull --ff-only
         fi
     fi
-    bash "$source_dir/scripts/install-runtime.sh" "$source_dir"
+    # Build and install the Rust CLI
+    cargo install --path "$source_dir" --root "$HOME/.local" --locked
+    # Build and install the driver
+    driver_dir="$INSTALL_ROOT/src/openshell-driver-apple-container"
+    if [[ ! -e "$driver_dir" ]]; then
+        gh repo clone potable-anarchy/openshell-driver-apple-container "$driver_dir"
+    else
+        git -C "$driver_dir" pull --ff-only 2>/dev/null || true
+    fi
+    cargo install --path "$driver_dir" --root "$HOME/.local" --locked
+    say ''
+    say 'trybox installed. Next:'
+    say '  trybox init'
+    say '  trybox driver start'
+    say '  trybox gateway start'
+    say '  trybox my first idea'
 }
 
 main "$@"

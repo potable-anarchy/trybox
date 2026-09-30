@@ -76,10 +76,7 @@ pub fn spawn_daemon(cmd: &[String], log_path: &Path, pidfile: &Path) -> io::Resu
                 .stdout(std::process::Stdio::from(log_file))
                 .stderr(std::process::Stdio::from(stderr_file))
                 .pre_exec(|| {
-                    // setsid() — detach from controlling terminal
-                    unsafe {
-                        libc::setsid();
-                    }
+                    libc::setsid();
                     Ok(())
                 });
         }
