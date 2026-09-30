@@ -1,5 +1,5 @@
 #!/bin/bash
-# trybox installer — checks, installs, and builds everything needed.
+# trybox installer — one-liner: bash <(curl -fsSL https://raw.githubusercontent.com/potable-anarchy/trybox/main/install.sh)
 set -euo pipefail
 
 say() { printf '%s\n' "$*"; }
@@ -7,23 +7,7 @@ fail() { say "ERROR: $*" >&2; return 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
 # ---------------------------------------------------------------------------
-# install_missing: install a brew formula if not already in PATH
-# ---------------------------------------------------------------------------
-brew_install() {
-    local formula=$1 tap=${2:-}
-    if have "$formula"; then
-        say "[OK] $formula"
-        return 0
-    fi
-    if [[ -n "$tap" ]]; then
-        brew tap "$tap" 2>/dev/null || true
-    fi
-    say "[INSTALL] brew install $formula ..."
-    brew install "$formula"
-}
-
-# ---------------------------------------------------------------------------
-# preflight — hard requirements (can't auto-fix these)
+# preflight — hard requirements
 # ---------------------------------------------------------------------------
 preflight_hard() {
     local failures=0 version major
@@ -70,7 +54,7 @@ preflight_hard() {
 }
 
 # ---------------------------------------------------------------------------
-# install_deps — auto-install everything that can be installed
+# install_deps — auto-install everything via brew + rustup
 # ---------------------------------------------------------------------------
 install_deps() {
     say ''
@@ -96,76 +80,53 @@ install_deps() {
     fi
 
     # container CLI
-    brew_install container
+    if ! have container; then
+        say '[INSTALL] brew install container …'
+        brew install container
+    else say '[OK] container'; fi
 
     # try CLI (tobi/try)
-    if have try; then
-        say '[OK] try'
-    else
+    if ! have try; then
         say '[INSTALL] brew install try …'
         brew install try
-    fi
+    else say '[OK] try'; fi
 
-    # OpenShell
-    if have openshell; then
-        say '[OK] openshell'
-    else
+    # OpenShell + gateway
+    if ! have openshell; then
         say '[INSTALL] brew install nvidia/openshell/openshell …'
         brew tap nvidia/openshell 2>/dev/null || true
         brew install nvidia/openshell/openshell
-    fi
+    else say '[OK] openshell'; fi
 
-    # openshell-gateway (comes with the openshell tap)
-    if have openshell-gateway; then
-        say '[OK] openshell-gateway'
-    else
+    if ! have openshell-gateway; then
         say '[INSTALL] brew install nvidia/openshell/openshell-gateway …'
         brew install nvidia/openshell/openshell-gateway
-    fi
+    else say '[OK] openshell-gateway'; fi
 
     # Rust toolchain
-    if have rustup; then
-        say '[OK] rustup'
-    else
+    if ! have rustup; then
         say '[INSTALL] rustup …'
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
         source "$HOME/.cargo/env"
-    fi
+    else say '[OK] rustup'; fi
 
-    # gh CLI (needed to clone private repos)
-    brew_install gh
-
-    # musl cross-compiler (for guest binaries — needed by driver build)
-    if have aarch64-linux-musl-gcc; then
-        say '[OK] musl-cross'
-    else
+    # musl cross-compiler (for driver guest binaries)
+    if ! have aarch64-linux-musl-gcc; then
         say '[INSTALL] brew install FiloSottile/musl-cross/musl-cross …'
         brew install FiloSottile/musl-cross/musl-cross
-    fi
+    else say '[OK] musl-cross'; fi
 }
 
 # ---------------------------------------------------------------------------
-# check_gh_access — verify GitHub repo access
+# clone — git clone (public repos, no gh auth needed)
 # ---------------------------------------------------------------------------
-check_gh_access() {
-    say ''
-    say 'Checking GitHub access…'
-    if ! gh auth status >/dev/null 2>&1; then
-        say '[FAIL] Not signed in to gh. Run: gh auth login'
-        say '        The repos are private — you need access to potable-anarchy/trybox'
-        say '        and potable-anarchy/openshell-driver-apple-container.'
-        return 1
+clone_or_pull() {
+    local url=$1 dir=$2
+    if [[ ! -e "$dir" ]]; then
+        git clone "$url" "$dir"
+    else
+        git -C "$dir" pull --ff-only 2>/dev/null || true
     fi
-    local repo ok=0
-    for repo in potable-anarchy/trybox potable-anarchy/openshell-driver-apple-container; do
-        if gh api "repos/$repo" --silent >/dev/null 2>&1; then
-            say "[OK] $repo"
-            ok=$((ok + 1))
-        else
-            say "[FAIL] Cannot access $repo"
-        fi
-    done
-    (( ok == 2 )) || return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -196,10 +157,9 @@ main() {
     preflight_hard || return 1
 
     if (( check_only )); then
-        # In check mode, just report what's missing
         say ''
         say 'Check mode — reporting only, not installing.'
-        for cmd in brew container try openshell openshell-gateway rustup gh aarch64-linux-musl-gcc; do
+        for cmd in brew container try openshell openshell-gateway rustup aarch64-linux-musl-gcc; do
             if have "$cmd"; then say "[OK] $cmd"; else say "[MISSING] $cmd"; fi
         done
         return 0
@@ -208,34 +168,20 @@ main() {
     # Auto-install dependencies
     install_deps || return 1
 
-    # Verify GitHub access
-    check_gh_access || return 1
-
     # Clone and build
     say ''
     say 'Building trybox…'
     mkdir -p "$INSTALL_ROOT" "$HOME/.local/bin"
     if [[ -z "$source_dir" ]]; then
         source_dir="$INSTALL_ROOT/src/trybox"
-        if [[ ! -e "$source_dir" ]]; then
-            gh repo clone potable-anarchy/trybox "$source_dir"
-        else
-            [[ -z "$(git -C "$source_dir" status --porcelain)" ]] || {
-                fail "Local edits in $source_dir; use --source or save them."; return 1;
-            }
-            git -C "$source_dir" pull --ff-only
-        fi
+        clone_or_pull https://github.com/potable-anarchy/trybox.git "$source_dir"
     fi
     cargo install --path "$source_dir" --root "$HOME/.local" --locked
 
     say ''
     say 'Building openshell-driver-apple-container…'
     driver_dir="$INSTALL_ROOT/src/openshell-driver-apple-container"
-    if [[ ! -e "$driver_dir" ]]; then
-        gh repo clone potable-anarchy/openshell-driver-apple-container "$driver_dir"
-    else
-        git -C "$driver_dir" pull --ff-only 2>/dev/null || true
-    fi
+    clone_or_pull https://github.com/potable-anarchy/openshell-driver-apple-container.git "$driver_dir"
     cargo install --path "$driver_dir" --root "$HOME/.local" --locked
 
     say ''
