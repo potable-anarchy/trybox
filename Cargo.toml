@@ -1,0 +1,27 @@
+[package]
+name = "trybox"
+version = "0.2.0"
+edition = "2021"
+license = "MIT"
+authors = ["Brad Dougherty"]
+description = "One command to a sandboxed AI coding experiment on a Mac"
+
+[[bin]]
+name = "trybox"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive", "env"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+nix = { version = "0.29", features = ["signal", "process"] }
+shell-words = "1"
+sha2 = "0.10"
+regex = "1"
+dirs = "5"
+libc = "0.2"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
