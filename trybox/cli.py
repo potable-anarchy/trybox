@@ -21,6 +21,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -225,7 +226,7 @@ def generate_pki() -> None:
     _openssl("req", "-new", "-key", str(SERVER_KEY),
              "-subj", "/CN=trybox-server/O=trybox",
              "-out", str(TLS_DIR / "server.csr"))
-    _openssl("x509", "-req", "-in", str(TLS_DIR / "server.csr"),
+    _openssl("x509", "-req", "-sha256", "-in", str(TLS_DIR / "server.csr"),
              "-CA", str(CA_CRT), "-CAkey", str(CA_KEY),
              "-CAserial", str(serial_file), "-CAcreateserial",
              "-days", "3650", "-extfile", str(server_ext), "-out", str(SERVER_CRT))
@@ -240,7 +241,7 @@ def generate_pki() -> None:
              "-out", str(TLS_DIR / "client.csr"))
     client_ext = TLS_DIR / "client.ext"
     client_ext.write_text("extendedKeyUsage=clientAuth\n")
-    _openssl("x509", "-req", "-in", str(TLS_DIR / "client.csr"),
+    _openssl("x509", "-req", "-sha256", "-in", str(TLS_DIR / "client.csr"),
              "-CA", str(CA_CRT), "-CAkey", str(CA_KEY),
              "-CAserial", str(serial_file), "-CAcreateserial",
              "-days", "3650", "-extfile", str(client_ext), "-out", str(CLIENT_CRT))
@@ -395,13 +396,28 @@ def ensure_gateway_registered() -> int:
         return 1
 
     if not gateway_registered():
+        # Copy mTLS certs BEFORE gateway add — `openshell gateway add --local`
+        # requires them to exist in the gateway config directory.
+        mtls_dir = HOME / ".config" / "openshell" / "gateways" / GATEWAY_NAME / "mtls"
+        mtls_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(CA_CRT, mtls_dir / "ca.crt")
+        shutil.copy2(CLIENT_CRT, mtls_dir / "tls.crt")
+        shutil.copy2(CLIENT_KEY, mtls_dir / "tls.key")
+
         proc = _run([osc, "gateway", "add", "--local", "--name", GATEWAY_NAME,
                      GATEWAY_ENDPOINT])
         if proc.returncode != 0:
-            print(f"openshell gateway add failed:\n{proc.stderr.strip() or proc.stdout.strip()}",
-                  file=sys.stderr)
-            return 1
-        print(f"registered gateway: {GATEWAY_NAME}")
+            # Gateway may already be registered from a previous run.
+            # Try to select it; if that works, we're fine.
+            proc2 = _run([osc, "gateway", "select", GATEWAY_NAME])
+            if proc2.returncode == 0:
+                print(f"gateway already registered: {GATEWAY_NAME}")
+            else:
+                print(f"openshell gateway add failed:\n{proc.stderr.strip() or proc.stdout.strip()}",
+                      file=sys.stderr)
+                return 1
+        else:
+            print(f"registered gateway: {GATEWAY_NAME}")
 
     proc = _run([osc, "gateway", "select", GATEWAY_NAME])
     if proc.returncode != 0:
@@ -436,9 +452,9 @@ def sandbox_create(t: Trybox, agent: str, image: str, policy: str) -> None:
         raise SystemExit("openshell CLI not found in PATH")
 
     cmd = [osc, "sandbox", "create", "--name", t.sandbox_name, "--from", image]
-    if policy:
+    if policy and Path(policy).exists():
         cmd += ["--policy", policy]
-    cmd += ["--", agent]
+    cmd += ["--", *shlex.split(agent)]
     print(f"creating sandbox: {' '.join(cmd)}")
     proc = subprocess.run(cmd, check=False)
     if proc.returncode != 0:

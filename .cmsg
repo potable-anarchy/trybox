@@ -1,0 +1,20 @@
+fix: CLI TLS + mTLS + agent command splitting for full e2e flow
+
+Four fixes to make `trybox "hello world"` work end-to-end:
+
+1. SHA256 cert signing: LibreSSL defaults to SHA1 for x509 -req,
+   which rustls rejects. Added -sha256 to server/client cert signing.
+
+2. mTLS cert provisioning: `openshell gateway add --local` requires
+   client certs in ~/.config/openshell/gateways/<name>/mtls/ BEFORE
+   the add command runs. Copy CA + client cert + key there first.
+
+3. Gateway re-registration: handle "already exists" gracefully by
+   falling back to `gateway select` instead of failing.
+
+4. Agent command splitting: `--agent "sleep 3600"` was passed as a
+   single argument. Use shlex.split() to properly split into
+   ["sleep", "3600"] for the openshell sandbox create -- args.
+
+E2E verified: trybox "hello world" → create (Ready) → exec → stop →
+start (resume, Ready) → exec after resume. Full 5/5 lifecycle.
