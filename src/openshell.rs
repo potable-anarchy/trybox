@@ -286,3 +286,20 @@ pub fn ensure_gateway() -> bool {
     }
     crate::commands::cmd_gateway("start") == 0
 }
+
+/// Wait for the gateway to accept TCP connections (up to 10s).
+pub fn wait_for_gateway() -> bool {
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    let addr = format!("127.0.0.1:{}", crate::config::GATEWAY_PORT);
+    for _ in 0..20 {
+        if let Ok(socket) = addr.parse() {
+            if TcpStream::connect_timeout(&socket, Duration::from_millis(500)).is_ok() {
+                return true;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    false
+}

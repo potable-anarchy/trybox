@@ -604,6 +604,16 @@ pub fn cmd_new_or_resume(
         eprintln!("failed to start gateway — run `trybox gateway start` manually");
         return 1;
     }
+
+    // Wait for the gateway to be ready before registering.
+    if !crate::openshell::wait_for_gateway() {
+        eprintln!(
+            "gateway did not become ready — check {}",
+            crate::config::gateway_log().display()
+        );
+        return 1;
+    }
+
     println!("ensuring gateway registered ...");
     if crate::openshell::ensure_gateway_registered() != 0 {
         eprintln!("failed to register/select gateway");
