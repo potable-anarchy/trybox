@@ -107,3 +107,39 @@ pub fn spawn_daemon(cmd: &[String], log_path: &Path, pidfile: &Path) -> io::Resu
 pub fn unlink_pidfile(pidfile: &Path) {
     let _ = fs::remove_file(pidfile);
 }
+
+/// Check if a TCP port is in use. If so, kill whatever holds it.
+/// This handles stale launchd-managed gateways or crashed processes
+/// that still hold the port but aren't tracked by our pidfile.
+pub fn ensure_port_free(port: u16) {
+    // Try to connect — if it succeeds, something is listening.
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    let addr = format!("127.0.0.1:{}", port);
+    if TcpStream::connect_timeout(&addr.parse().unwrap(), Duration::from_millis(500)).is_err() {
+        // Nobody listening — port is free.
+        return;
+    }
+
+    // Something is on the port. Find and kill it via lsof.
+    eprintln!("port {} is in use by another process — killing it", port);
+    let output = std::process::Command::new("lsof")
+        .args(["-ti", &format!(":{}", port)])
+        .output();
+    if let Ok(out) = output {
+        let pids = String::from_utf8_lossy(&out.stdout);
+        for line in pids.lines() {
+            if let Ok(pid) = line.trim().parse::<i32>() {
+                // SIGTERM first, then SIGKILL
+                let _ = kill(Pid::from_raw(pid), Signal::SIGTERM);
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                if pid_running(pid) {
+                    let _ = kill(Pid::from_raw(pid), Signal::SIGKILL);
+                }
+                eprintln!("killed stale process {} on port {}", pid, port);
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+}

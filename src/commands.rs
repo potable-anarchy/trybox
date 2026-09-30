@@ -345,6 +345,9 @@ pub fn cmd_gateway(action: &str) -> i32 {
         }
         let _ = fs::create_dir_all(crate::config::state_dir());
 
+        // Kill any stale process holding our port (e.g. launchd-managed gateway)
+        crate::process::ensure_port_free(crate::config::GATEWAY_PORT);
+
         let cmd = vec![
             gw_bin.clone(),
             "--config".to_string(),
