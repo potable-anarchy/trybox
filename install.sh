@@ -33,6 +33,8 @@ preflight_hard() {
     fi
     if [[ "$(uname -m)" != arm64 ]]; then
         say '[FAIL] Apple Silicon required (not Rosetta).'
+        say '       Run this installer from a native arm64 terminal, not a Rosetta shell.'
+        say '       In Terminal.app: Settings > General > Shell opens with: /bin/bash (arm64)'
         failures=$((failures + 1))
     else say '[OK] Apple Silicon'; fi
     version=$(sw_vers -productVersion)
@@ -41,13 +43,25 @@ preflight_hard() {
         say "[OK] macOS $version"
     else
         say "[FAIL] macOS 26+ required; found $version."
+        say "       Update: System Settings > General > Software Update"
         failures=$((failures + 1))
     fi
     if [[ "$(sysctl -n kern.hv_support 2>/dev/null || true)" == 1 ]]; then
         say '[OK] Hardware virtualization'
     else
         say '[FAIL] Hardware virtualization is unavailable.'
-        failures=$((failures + 1))
+        say '       If running in a VM, nested virtualization may not be supported.'
+        say '       If on bare metal, check for restricted mode:'
+        say '         nvram boot-args  (look for "csr-active-config" or "amfi_get_out_of_my_way")'
+        say '       Clearing restricted boot args requires sudo + reboot:'
+        say '         sudo nvram boot-args=""'
+        say '       Or skip this check if you know your hardware supports it:'
+        say '         SKIP_HV_CHECK=1 bash install.sh'
+        if [[ -n "${SKIP_HV_CHECK:-}" ]]; then
+            say '  [SKIP] Skipping per SKIP_HV_CHECK=1'
+        else
+            failures=$((failures + 1))
+        fi
     fi
     if (( failures )); then
         fail "$failures hard requirement(s) failed. Cannot continue."
