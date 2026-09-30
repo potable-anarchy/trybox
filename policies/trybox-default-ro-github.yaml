@@ -23,6 +23,10 @@ landlock:
 network_policies:
   github_readonly:
     name: github-readonly
+    binaries:
+      - { path: /usr/bin/curl }
+      - { path: /usr/bin/git }
+      - { path: /usr/lib/git-core/git-remote-http }
     endpoints:
       - host: github.com
         port: 443
@@ -52,6 +56,10 @@ network_policies:
 
   pypi_readonly:
     name: pypi-readonly
+    binaries:
+      - { path: /usr/bin/curl }
+      - { path: /usr/bin/python3.11 }
+      - { path: /usr/local/bin/python3.12 }
     endpoints:
       - host: pypi.org
         port: 443
@@ -66,6 +74,10 @@ network_policies:
 
   npm_readonly:
     name: npm-readonly
+    binaries:
+      - { path: /usr/bin/curl }
+      - { path: /usr/bin/node }
+      - { path: /usr/local/bin/node }
     endpoints:
       - host: registry.npmjs.org
         port: 443

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -14,9 +14,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from . import runtime
+
 VERSION = "0.1.0"
 DEFAULT_TRY_PATH = Path(os.environ.get("TRY_PATH", Path.home() / "src/tries")).expanduser()
-DEFAULT_POLICY_NAME = "trybox-default-ro-github"
+DEFAULT_POLICY_NAME = str(runtime.ROOT / "assets/policies/trybox-default-ro-github.yaml")
 
 
 @dataclass
@@ -34,9 +36,14 @@ class Trybox:
 
 
 def slugify(text: str) -> str:
-    # mirror try's behavior: "\s+" -> "-"
-    slug = re.sub(r"\s+", "-", text.strip()).lower()
-    return slug
+    return re.sub(r"[^a-z0-9]+", "-", text.strip().lower()).strip("-")
+
+
+def sandbox_name(name: str) -> str:
+    candidate = f"trybox-{name}"
+    if len(candidate) <= 19:
+        return candidate
+    return f"trybox-{name[:5]}-{hashlib.sha256(name.encode()).hexdigest()[:6]}"
 
 
 def today() -> str:
@@ -56,7 +63,7 @@ def find_trybox(name: str, base: Path = DEFAULT_TRY_PATH) -> Trybox | None:
                     return Trybox(
                         name=name,
                         dir=entry,
-                        sandbox_name=f"trybox-{name}",
+                        sandbox_name=sandbox_name(name),
                         date_prefix=date_prefix,
                     )
     return None
@@ -81,7 +88,7 @@ def create_try_dir(name: str, base: Path = DEFAULT_TRY_PATH) -> Trybox:
     return Trybox(
         name=name,
         dir=target,
-        sandbox_name=f"trybox-{name}",
+        sandbox_name=sandbox_name(name),
         date_prefix=date_prefix,
     )
 
@@ -95,7 +102,7 @@ def openshell_ok() -> tuple[bool, str]:
     if not shutil.which("openshell"):
         return False, "openshell CLI not found in PATH (brew install nvidia/openshell/openshell)"
     proc = subprocess.run(
-        ["openshell", "status", "--json"],
+        ["openshell", "status", "-o", "json"],
         capture_output=True,
         text=True,
         check=False,
@@ -108,7 +115,7 @@ def openshell_ok() -> tuple[bool, str]:
 def sandbox_list() -> list[dict]:
     """Return list of openshell sandboxes as dicts."""
     proc = subprocess.run(
-        ["openshell", "sandbox", "list", "--json"],
+        ["openshell", "sandbox", "list", "-o", "json"],
         capture_output=True,
         text=True,
         check=False,
@@ -116,7 +123,8 @@ def sandbox_list() -> list[dict]:
     if proc.returncode != 0:
         return []
     try:
-        return json.loads(proc.stdout)
+        data = json.loads(proc.stdout)
+        return data if isinstance(data, list) else data.get("sandboxes", [])
     except json.JSONDecodeError:
         return []
 
@@ -133,21 +141,22 @@ def sandbox_create(t: Trybox, agent: str, image: str, policy: str) -> None:
         "create",
         "--name",
         t.sandbox_name,
+        "--detach",
     ]
     if image:
         cmd += ["--from", image]
     if policy:
         cmd += ["--policy", policy]
-    cmd += ["--", agent]
+    cmd += ["--", "/bin/sleep", "infinity"]
     proc = subprocess.run(cmd, check=False)
     if proc.returncode != 0:
         raise SystemExit(f"openshell sandbox create failed (exit {proc.returncode})")
 
 
-def sandbox_connect(t: Trybox) -> int:
+def sandbox_connect(t: Trybox, agent: str = "/bin/bash") -> int:
     """Connect to an existing sandbox; replaces this process."""
     return subprocess.run(
-        ["openshell", "sandbox", "connect", t.sandbox_name], check=False
+        ["openshell", "sandbox", "exec", "--name", t.sandbox_name, "--", agent], check=False
     ).returncode
 
 
@@ -159,13 +168,26 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     checks = []
     checks.append(("macOS arm64", os.uname().machine == "arm64"))
     checks.append(("container CLI", shutil.which("container") is not None))
-    checks.append(("try CLI", shutil.which("try") is not None))
+    checks.append(("macOS 26+", sys.platform == "darwin" and int(os.uname().release.split(".")[0]) >= 25))
     openshell_cli = shutil.which("openshell") is not None
     checks.append(("openshell CLI", openshell_cli))
     if openshell_cli:
         ok, msg = openshell_ok()
         checks.append((f"openshell gateway ({msg.splitlines()[0] if not ok else 'OK'})", ok))
-    checks.append((f"try path ({DEFAULT_TRY_PATH})", DEFAULT_TRY_PATH.exists() or True))
+    for label, path in (
+        ("host supervisor", runtime.ROOT / "host-bin/openshell-supervisor"),
+        ("guest sandbox", runtime.ROOT / "supervisor-bin/openshell-sandbox"),
+        ("guest entrypoint", runtime.ROOT / "supervisor-bin/trybox-entrypoint"),
+        ("default policy", Path(DEFAULT_POLICY_NAME)),
+    ):
+        checks.append((label, path.is_file()))
+    if shutil.which("container"):
+        for label, command in (
+            ("Apple Container service", ["container", "system", "status"]),
+            ("sandbox image", ["container", "image", "inspect", "local/trybox-sandbox:latest"]),
+        ):
+            result = subprocess.run(command, capture_output=True, timeout=15)
+            checks.append((label, result.returncode == 0))
 
     # Apple Container driver
     driver_bin = shutil.which("openshell-driver-apple-container")
@@ -175,7 +197,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         checks.append((f"driver version: {driver_v.stdout.strip().splitlines()[0] if driver_v.returncode == 0 else 'unknown'}", driver_v.returncode == 0))
 
     # Driver socket, if exists
-    sock_path = Path(os.environ.get("TRYBOX_DRIVER_SOCK", Path.home() / ".local" / "state" / "trybox" / "driver.sock"))
+    sock_path = Path(os.environ.get("TRYBOX_DRIVER_SOCK", runtime.ROOT / "state/driver.sock"))
     checks.append((f"driver socket ({sock_path})", sock_path.exists()))
 
     all_ok = all(ok for _, ok in checks)
@@ -191,19 +213,19 @@ def cmd_new_or_resume(args: argparse.Namespace) -> int:
         print("trybox needs a non-empty name", file=sys.stderr)
         return 1
 
-    existing = find_trybox(name)
+    existing = find_trybox(name, args.try_path)
     if existing:
         t = existing
         if not sandbox_exists(t.sandbox_name):
             print(f" resurrection: try dir {t.dir} exists, but sandbox {t.sandbox_name} is gone — recreating")
             sandbox_create(t, args.agent, args.image, args.policy)
         print(f"connecting: {t.dir}")
-        return sandbox_connect(t)
+        return sandbox_connect(t, args.agent)
 
-    t = create_try_dir(name)
+    t = create_try_dir(name, args.try_path)
     print(f"created try dir: {t.dir}")
     sandbox_create(t, args.agent, args.image, args.policy)
-    return sandbox_connect(t)
+    return sandbox_connect(t, args.agent)
 
 
 def cmd_list(args: argparse.Namespace) -> int:
@@ -219,7 +241,7 @@ def cmd_list(args: argparse.Namespace) -> int:
         if not m:
             continue
         date_prefix, slug = m.group(1), m.group(2)
-        sb_name = f"trybox-{slug}"
+        sb_name = sandbox_name(slug)
         state = sandboxes.get(sb_name, {}).get("state", "-")
         rows.append((date_prefix, slug, sb_name, state))
     if not rows:
@@ -234,14 +256,14 @@ def cmd_list(args: argparse.Namespace) -> int:
 def cmd_stop(args: argparse.Namespace) -> int:
     name = slugify(args.name)
     t = find_trybox(name)
-    target = t.sandbox_name if t else f"trybox-{name}"
+    target = t.sandbox_name if t else sandbox_name(name)
     return subprocess.run(["openshell", "sandbox", "stop", target], check=False).returncode
 
 
 def cmd_rm(args: argparse.Namespace) -> int:
     name = slugify(args.name)
     t = find_trybox(name)
-    target = t.sandbox_name if t else f"trybox-{name}"
+    target = t.sandbox_name if t else sandbox_name(name)
     rc = subprocess.run(["openshell", "sandbox", "delete", target], check=False).returncode
     if rc != 0:
         return rc
@@ -255,85 +277,23 @@ def cmd_rm(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 # driver management
 
-DRIVER_SOCK_DEFAULT = Path.home() / ".local" / "state" / "trybox" / "driver.sock"
-DRIVER_PIDFILE = Path.home() / ".local" / "state" / "trybox" / "driver.pid"
-DRIVER_LOG = Path.home() / ".local" / "state" / "trybox" / "driver.log"
-DRIVER_SUPERVISOR_BIN = Path.home() / ".local/share/trybox/supervisor-bin"
-
-
-def _driver_running() -> int | None:
-    pidfile = DRIVER_PIDFILE
-    if not pidfile.exists():
-        return None
-    try:
-        pid = int(pidfile.read_text().strip())
-    except ValueError:
-        return None
-    result = subprocess.run(["kill", "-0", str(pid)], capture_output=True, check=False)
-    return pid if result.returncode == 0 else None
-
-
 def cmd_driver(args: argparse.Namespace) -> int:
-    sock = Path(os.environ.get("TRYBOX_DRIVER_SOCK", DRIVER_SOCK_DEFAULT))
-    sock.parent.mkdir(parents=True, exist_ok=True)
-
-    if args.action == "status":
-        pid = _driver_running()
-        if pid:
-            print(f"openshell-driver-apple-container running (pid {pid}, sock {sock})")
-            return 0
-        print("openshell-driver-apple-container not running")
-        return 1
-
-    if args.action == "stop":
-        pid = _driver_running()
-        if not pid:
-            print("no driver running")
-            return 0
-        os.kill(pid, 15)
-        try:
-            DRIVER_PIDFILE.unlink()
-        except FileNotFoundError:
-            pass
-        print(f"stopped driver (pid {pid})")
-        return 0
-
     if args.action == "start":
-        if _driver_running():
-            print(f"driver already running (pid {_driver_running()})")
-            return 0
-        driver_bin = shutil.which("openshell-driver-apple-container")
-        if not driver_bin:
-            print("openshell-driver-apple-container not installed. See `trybox doctor`.", file=sys.stderr)
-            return 1
-        supervisor_bin = args.supervisor_bin_dir or DRIVER_SUPERVISOR_BIN
-        if not supervisor_bin.exists():
-            print(f"supervisor_bin_dir missing: {supervisor_bin}", file=sys.stderr)
-            return 1
-        log = DRIVER_LOG
-        log.parent.mkdir(parents=True, exist_ok=True)
-        logfile = open(log, "a", buffering=1)
-        proc = subprocess.Popen(
-            [driver_bin, "--bind-socket", str(sock), "--supervisor-bin-dir", str(supervisor_bin)],
-            stdout=logfile, stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-        DRIVER_PIDFILE.write_text(str(proc.pid))
-        print(f"driver started (pid {proc.pid}, sock {sock}, log {log})")
+        runtime.start()
         return 0
-
-    print(f"unknown driver action: {args.action}", file=sys.stderr)
-    return 1
+    if args.action == "stop":
+        runtime.stop_services()
+        return 0
+    return subprocess.run(
+        ["launchctl", "print", f"gui/{os.getuid()}/com.trybox.driver"],
+        stdout=subprocess.DEVNULL, check=False,
+    ).returncode
 
 
 def cmd_image(args: argparse.Namespace) -> int:
-    script = Path(__file__).parent.parent / "images" / "build.sh"
+    script = runtime.ROOT / "assets/images/build.sh"
     if not script.exists():
-        # pip-installed case: look next to the venv
-        # uv tool installs go to ~/.local/share/uv/tools/<pkg>/lib/pythonX/site-packages/<pkg>/
-        here = Path(sys.executable).parent.parent.parent.parent / "share" / "trybox" / "images" / "build.sh"
-        if here.exists():
-            script = here
+        script = Path(__file__).parent.parent / "images/build.sh"
     env = dict(os.environ)
     env["TRYBOX_IMAGE_REF"] = args.tag
     return subprocess.run(["bash", str(script)], env=env, check=False).returncode
@@ -344,7 +304,22 @@ def cmd_image(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
+    os.environ.update(runtime.environment())
     argv = sys.argv[1:]
+    if argv and argv[0] == "openshell":
+        return subprocess.run(["openshell", *argv[1:]], check=False).returncode
+    if argv and argv[0] == "uninstall":
+        p = argparse.ArgumentParser(prog="trybox uninstall")
+        p.add_argument("--yes", action="store_true", help="perform the uninstall (otherwise preview)")
+        args = p.parse_args(argv[1:])
+        runtime.uninstall(args.yes)
+        return 0
+    if argv and argv[0] == "services":
+        p = argparse.ArgumentParser(prog="trybox services")
+        p.add_argument("action", choices=["start", "stop"])
+        args = p.parse_args(argv[1:])
+        runtime.start() if args.action == "start" else runtime.stop_services()
+        return 0
 
     # Custom dispatch BEFORE argparse to avoid the subparser-vs-name collision.
     if argv and argv[0] in {"doctor", "list", "stop", "rm", "driver", "image"}:
@@ -369,7 +344,6 @@ def main() -> int:
         if subcmd == "driver":
             p = argparse.ArgumentParser(prog="trybox driver")
             p.add_argument("action", choices=["start", "stop", "status"])
-            p.add_argument("--supervisor-bin-dir", type=Path)
             return cmd_driver(p.parse_args(subargv))
         if subcmd == "image":
             p = argparse.ArgumentParser(prog="trybox image")
@@ -392,12 +366,12 @@ def main() -> int:
             "it creates the try dir and a fresh openshell sandbox in one motion.\n"
         ),
     )
-    parser.add_argument("--agent", default=os.environ.get("TRYBOX_AGENT", "opencode"),
+    parser.add_argument("--agent", default=os.environ.get("TRYBOX_AGENT", "/bin/bash"),
                         help="agent CLI to run inside the sandbox (default: %(default)s)")
     parser.add_argument("--image", default=os.environ.get("TRYBOX_IMAGE", "local/trybox-sandbox:latest"),
                         help="override sandbox image (default: %(default)s)")
     parser.add_argument("--policy", default=os.environ.get("TRYBOX_POLICY", DEFAULT_POLICY_NAME),
-                        help="openshell policy name (default: %(default)s)")
+                        help="openshell policy YAML path (default: %(default)s)")
     parser.add_argument("--try-path", type=Path, default=DEFAULT_TRY_PATH,
                         help="root for try dirs (default: %(default)s; env TRY_PATH)")
     parser.add_argument("name", nargs="*",
