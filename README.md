@@ -2,6 +2,10 @@
 
 `trybox "my idea"` — instant, sandboxed AI coding experiments on a Mac.
 
+```sh
+bash <(curl -fsSL https://raw.githubusercontent.com/potable-anarchy/trybox/main/install.sh)
+```
+
 One command turns a string into a dated try directory and a fresh [OpenShell](https://github.com/nvidia/openshell) sandbox backed by [Apple Container](https://github.com/apple/container). Exit and the directory stays on your Mac; the sandbox can be resumed or deleted.
 
 trybox builds on three projects it couldn't exist without:
