@@ -1,0 +1,13 @@
+feat: full trybox CLI — init, gateway, driver, PKI generation
+
+Rewrote cli.py to handle the full end-to-end flow:
+- trybox init: generates TLS PKI (CA, server, client, JWT Ed25519)
+  at ~/.local/share/trybox/tls/ and writes gateway.toml
+- trybox gateway start|stop|status: manages openshell-gateway
+  with TLS + JWT + mTLS client_ca_path
+- trybox driver start: passes --gateway-port 17671, --host-tls-*,
+  --allow-same-uid-peer flags needed for host supervisor mTLS
+- trybox <name>: ensures driver + gateway running, creates try dir,
+  registers + selects the trybox gateway, creates sandbox, connects
+- Default try path: ~/code/tries (matching Brad's setup)
+- Gateway port 17671, TLS endpoint https://127.0.0.1:17671
