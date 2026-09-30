@@ -47,8 +47,8 @@ struct Cli {
     command: Option<Commands>,
 
     // --- Bare-name form flags (only used when no subcommand) ---
-    /// agent CLI to run inside the sandbox (default: opencode; env TRYBOX_AGENT)
-    #[arg(long, env = "TRYBOX_AGENT", default_value = "opencode")]
+    /// agent CLI to run inside the sandbox (default: hermes; env TRYBOX_AGENT)
+    #[arg(long, env = "TRYBOX_AGENT", default_value = "hermes")]
     agent: String,
 
     /// override sandbox image (default: local/trybox-sandbox:latest)
